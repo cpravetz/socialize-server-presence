@@ -32,7 +32,7 @@ export const ServerPresence = {};
 
 const insert = () => {
     const date = new Date();
-    serverId = Servers.insert({ lastPing: date, createdAt: date });
+    serverId = Servers.insertAsync({ lastPing: date, createdAt: date });
 };
 
 const runCleanupFunctions = (removedServerId) => {
@@ -43,43 +43,55 @@ const runCleanupFunctions = (removedServerId) => {
 
 const setAsWatcher = () => {
     isWatcher = true;
-    Servers.update({ _id: serverId }, { $set: { watcher: true } });
+    Servers.updateAsync({ _id: serverId }, { $set: { watcher: true } });
 };
 
-const updateWatcher = () => {
-    const server = Servers.findOne({}, { sort: { createdAt: -1 } });
+const updateWatcher = async function()  {
+    const server = await Servers.findOneAsync({}, { sort: { createdAt: -1 } });
     if (server._id === serverId) {
         setAsWatcher();
     }
 };
 
 const observe = () => {
-    observeHandle = Servers.find().observe({
-        removed(document) {
-            if (document._id === serverId) {
-                if (!isWatcher) {
-                    Meteor._debug('Server Presence Timeout', 'The server-presence package has detected inconsistent presence state. To avoid inconsistent database state your application is exiting.');
-                    exitGracefully = false;
-                    process.kill(process.pid, 'SIGHUP');
-                } else {
-                    insert();
+    try {
+        observeHandle = Servers.find().observe({
+            removed(document) {
+                if (document._id === serverId) {
+                    if (!isWatcher) {
+                        Meteor._debug('Server Presence Timeout', 'The server-presence package has detected inconsistent presence state. To avoid inconsistent database state your application is exiting.');
+                        exitGracefully = false;
+                        process.kill(process.pid, 'SIGHUP');
+                    } else {
+                        insert();
+                    }
+                } else if (isWatcher) {
+                    if (!document.graceful) {
+                        runCleanupFunctions(document._id);
+                    }
+                } else if (document.watcher) {
+                    if (!document.graceful) {
+                        runCleanupFunctions(document._id);
+                    }
+                    updateWatcher();
                 }
-            } else if (isWatcher) {
-                if (!document.graceful) {
-                    runCleanupFunctions(document._id);
-                }
-            } else if (document.watcher) {
-                if (!document.graceful) {
-                    runCleanupFunctions(document._id);
-                }
-                updateWatcher();
-            }
-        },
-    });
+            },
+        });
+        
+        // Ensure observeHandle has a stop method
+        if (!observeHandle || typeof observeHandle.stop !== 'function') {
+            console.warn('Server presence observe handle is not properly initialized');
+            observeHandle = { stop: () => console.log('Dummy stop method called') };
+        }
+    } catch (error) {
+        console.error('Error setting up server presence observer:', error);
+        // Create a dummy observe handle with a stop method
+        observeHandle = { stop: () => console.log('Dummy stop method called') };
+    }
 };
 
-const checkForWatcher = () => {
-    const current = Servers.findOne({ watcher: true });
+const checkForWatcher = async function()  {
+    const current = await Servers.findOneAsync({ watcher: true });
     if (current) {
         return true;
     }
@@ -88,19 +100,23 @@ const checkForWatcher = () => {
 };
 
 const start = () => {
-    observe();
+    try {
+        observe();
 
-    Meteor.setInterval(function serverTick() {
-        Servers.update(serverId, { $set: { lastPing: new Date() } });
-        return true;
-    }, 5000);
+        Meteor.setInterval(function serverTick() {
+            Servers.updateAsync(serverId, { $set: { lastPing: new Date() } });
+            return true;
+        }, 5000);
 
-    insert();
+        insert();
 
-    // if there isn't any other instance watching and doing cleanup
-    // then we need to do a full cleanup since this is likely the only instance
-    if (!checkForWatcher()) {
-        runCleanupFunctions();
+        // if there isn't any other instance watching and doing cleanup
+        // then we need to do a full cleanup since this is likely the only instance
+        if (!checkForWatcher()) {
+            runCleanupFunctions();
+        }
+    } catch (error) {
+        console.error('Error starting server presence:', error);
     }
 };
 
@@ -115,8 +131,13 @@ const exit = () => {
 */
 const stop = Meteor.bindEnvironment(function boundEnvironment() {
     if (exitGracefully) {
-        Servers.update({ _id: serverId }, { $set: { graceful: true } });
-        observeHandle.stop();
+        Servers.updateAsync({ _id: serverId }, { $set: { graceful: true } });
+        
+        // Check if observeHandle exists and has a stop method before calling it
+        if (observeHandle && typeof observeHandle.stop === 'function') {
+            observeHandle.stop();
+        }
+        
         exit();
     }
 });

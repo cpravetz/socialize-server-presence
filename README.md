@@ -25,10 +25,10 @@ meteor add socialize:server-presence
 ```javascript
 Meteor.publish(null, function(){
     if(this.userId && this._session){
-        var id = UserSessions.insert({serverId:ServerPresence.serverId(), userId:this.userId, sessionId:this._session.id});
+        var id = UserSessions.insertAsync({serverId:ServerPresence.serverId(), userId:this.userId, sessionId:this._session.id});
 
         this.onStop(function(){
-            UserSessions.remove(id);
+            UserSessions.removeAsync(id);
         });
     }
 }, {is_auto:true});
@@ -39,9 +39,9 @@ Meteor.publish(null, function(){
 ```javascript
 ServerPresence.onCleanup(function(serverId){
     if(serverId){
-        UserSessions.remove({serverId:serverId});
+        UserSessions.removeAsync({serverId:serverId});
     }else{
-        UserSessions.remove({});
+        UserSessions.removeAsync({});
     }
 });
 ```
